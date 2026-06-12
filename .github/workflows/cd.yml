@@ -1,0 +1,83 @@
+name: CDK CD
+
+# Deploy infra khi push develop / staging.
+#
+# GitHub Environments: cdk-develop | cdk-staging
+# Secret:  AWS_ROLE_TO_ASSUME
+# Vars:     CDK_PROJECT_ID, AWS_ACCOUNT_ID, AWS_REGION
+
+on:
+  push:
+    branches:
+      - develop
+      - staging
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  resolve-env:
+    runs-on: ubuntu-latest
+    outputs:
+      target_env: ${{ steps.set-env.outputs.target_env }}
+      cdk_env: ${{ steps.set-env.outputs.cdk_env }}
+    steps:
+      - name: Select environment by branch
+        id: set-env
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_NAME}" == "staging" ]]; then
+            echo "target_env=cdk-staging" >> "$GITHUB_OUTPUT"
+            echo "cdk_env=stg" >> "$GITHUB_OUTPUT"
+          else
+            echo "target_env=cdk-develop" >> "$GITHUB_OUTPUT"
+            echo "cdk_env=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    needs: resolve-env
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve-env.outputs.target_env }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Validate GitHub Environment vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          [[ -z "${{ vars.CDK_PROJECT_ID }}" ]] && missing+=("CDK_PROJECT_ID")
+          [[ -z "${{ vars.AWS_REGION }}" ]] && missing+=("AWS_REGION")
+          [[ -z "${{ vars.AWS_ACCOUNT_ID }}" ]] && missing+=("AWS_ACCOUNT_ID")
+          if [[ "${#missing[@]}" -gt 0 ]]; then
+            echo "Missing vars on '${{ needs.resolve-env.outputs.target_env }}': ${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Install and build
+        run: |
+          npm ci
+          npm run build
+
+      - name: CDK deploy all stacks
+        env:
+          CDK_PROJECT_ID: ${{ vars.CDK_PROJECT_ID }}
+          CDK_ENV: ${{ needs.resolve-env.outputs.cdk_env }}
+          AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: npx cdk deploy --all --require-approval never

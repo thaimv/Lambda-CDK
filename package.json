@@ -1,0 +1,24 @@
+{
+  "name": "lambda-base-cdk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AWS CDK for Lambda_base infrastructure",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "synth": "cdk synth",
+    "diff": "cdk diff"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "aws-cdk": "^2.175.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.175.0",
+    "constructs": "^10.4.2",
+    "dotenv": "^16.6.1"
+  }
+}
