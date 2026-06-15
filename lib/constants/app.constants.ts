@@ -11,5 +11,6 @@ export const SERVICE_PRINCIPAL = {
   LAMBDA: 'lambda.amazonaws.com',
   RDS: 'rds.amazonaws.com',
   APPSYNC: 'appsync.amazonaws.com',
+  SCHEDULER: 'scheduler.amazonaws.com',
   STATES: 'states.amazonaws.com',
 } as const;

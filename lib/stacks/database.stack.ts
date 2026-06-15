@@ -1,12 +1,18 @@
+import * as path from 'path';
+
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as iam from 'aws-cdk-lib/aws-iam';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as rds from 'aws-cdk-lib/aws-rds';
+import * as scheduler from 'aws-cdk-lib/aws-scheduler';
+import * as schedulerTargets from 'aws-cdk-lib/aws-scheduler-targets';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
-import { CfnOutput, Duration, RemovalPolicy, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, Duration, RemovalPolicy, Stack, TimeZone, type StackProps } from 'aws-cdk-lib';
 import type { Construct } from 'constructs';
 
 import { SERVICE_PRINCIPAL } from '../constants/app.constants';
 import { Environment } from '../constants/environment.constants';
-import type { LoadedConfig } from '../types/config.types';
+import type { DatabaseScheduleConfig, LoadedConfig } from '../types/config.types';
 import { createServiceRole } from '../utils/iam-roles.utils';
 import { ResourceNaming } from '../utils/naming.utils';
 
@@ -21,6 +27,78 @@ const resolvePostgresEngineVersion = (version: string): rds.PostgresEngineVersio
     default:
       throw new Error(`Unsupported PostgreSQL engine version: ${version}`);
   }
+};
+
+const createRdsSchedule = (
+  scope: Construct,
+  config: LoadedConfig,
+  naming: ResourceNaming,
+  instanceIdentifier: string,
+  schedule: DatabaseScheduleConfig,
+): void => {
+  const schedulerFunctionName = naming.resource('rds-scheduler');
+  const schedulerRole = new iam.Role(scope, 'RdsSchedulerRole', {
+    roleName: naming.iamRole(schedulerFunctionName),
+    assumedBy: new iam.ServicePrincipal(SERVICE_PRINCIPAL.LAMBDA),
+    managedPolicies: [
+      iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+    ],
+  });
+  schedulerRole.addToPolicy(
+    new iam.PolicyStatement({
+      actions: ['rds:DescribeDBInstances', 'rds:StopDBInstance', 'rds:StartDBInstance'],
+      resources: [
+        Stack.of(scope).formatArn({
+          service: 'rds',
+          resource: 'db',
+          resourceName: instanceIdentifier,
+        }),
+      ],
+    }),
+  );
+
+  const schedulerFn = new lambda.Function(scope, 'RdsSchedulerFn', {
+    functionName: schedulerFunctionName,
+    runtime: lambda.Runtime.PYTHON_3_12,
+    handler: 'handler.handler',
+    code: lambda.Code.fromAsset(path.join(__dirname, '../../assets/rds-scheduler')),
+    role: schedulerRole,
+    memorySize: 128,
+    timeout: Duration.seconds(30),
+    architecture: lambda.Architecture.ARM_64,
+    environment: {
+      DB_INSTANCE_ID: instanceIdentifier,
+    },
+  });
+
+  const scheduleRole = createServiceRole(
+    scope,
+    'RdsScheduleInvokeRole',
+    naming.iamRole(naming.resource('rds-schedule')),
+    SERVICE_PRINCIPAL.SCHEDULER,
+  );
+  schedulerFn.grantInvoke(scheduleRole);
+
+  const timeZone = TimeZone.of(schedule.timezone);
+  const scheduleTarget = (action: 'stop' | 'start') =>
+    new schedulerTargets.LambdaInvoke(schedulerFn, {
+      input: scheduler.ScheduleTargetInput.fromObject({ action }),
+      role: scheduleRole,
+    });
+
+  new scheduler.Schedule(scope, 'RdsStopSchedule', {
+    scheduleName: naming.resource('rds-stop-schedule'),
+    description: `Stop ${instanceIdentifier} (${config.stackPrefix})`,
+    schedule: scheduler.ScheduleExpression.expression(`cron(${schedule.stopCron})`, timeZone),
+    target: scheduleTarget('stop'),
+  });
+
+  new scheduler.Schedule(scope, 'RdsStartSchedule', {
+    scheduleName: naming.resource('rds-start-schedule'),
+    description: `Start ${instanceIdentifier} (${config.stackPrefix})`,
+    schedule: scheduler.ScheduleExpression.expression(`cron(${schedule.startCron})`, timeZone),
+    target: scheduleTarget('start'),
+  });
 };
 
 export type DatabaseStackProps = StackProps & {
@@ -85,8 +163,10 @@ export class DatabaseStack extends Stack {
       ? { subnets: [...publicSubnets.subnets, ...privateSubnets.subnets] }
       : privateSubnets;
 
+    const instanceIdentifier = naming.resource('postgres');
+
     const instance = new rds.DatabaseInstance(this, 'Postgres', {
-      instanceIdentifier: naming.resource('postgres'),
+      instanceIdentifier,
       engine: rds.DatabaseInstanceEngine.postgres({
         version: resolvePostgresEngineVersion(config.database.engineVersion),
       }),
@@ -143,5 +223,9 @@ export class DatabaseStack extends Stack {
       exportName: naming.resource(rdsSecretName, 'arn'),
       value: credentials.secretArn,
     });
+
+    if (config.database.schedule?.enabled) {
+      createRdsSchedule(this, config, naming, instanceIdentifier, config.database.schedule);
+    }
   }
 }

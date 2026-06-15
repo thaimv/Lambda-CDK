@@ -5,6 +5,7 @@ name: CDK CD
 # GitHub Environments: cdk-develop | cdk-staging
 # Secret:  AWS_ROLE_TO_ASSUME
 # Vars:     CDK_PROJECT_ID, AWS_ACCOUNT_ID, AWS_REGION
+#           RDS_SCHEDULE_* (cdk-develop only — optional)
 
 on:
   push:
@@ -80,4 +81,8 @@ jobs:
           CDK_ENV: ${{ needs.resolve-env.outputs.cdk_env }}
           AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
           AWS_REGION: ${{ vars.AWS_REGION }}
+          RDS_SCHEDULE_ENABLED: ${{ vars.RDS_SCHEDULE_ENABLED }}
+          RDS_SCHEDULE_TIMEZONE: ${{ vars.RDS_SCHEDULE_TIMEZONE }}
+          RDS_SCHEDULE_STOP_CRON: ${{ vars.RDS_SCHEDULE_STOP_CRON }}
+          RDS_SCHEDULE_START_CRON: ${{ vars.RDS_SCHEDULE_START_CRON }}
         run: npx cdk deploy --all --require-approval never

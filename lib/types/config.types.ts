@@ -43,6 +43,15 @@ export type StepFunctionsConfig = {
   deleteUserBatch: StepFunctionConfig;
 };
 
+export type DatabaseScheduleConfig = {
+  enabled: boolean;
+  /** IANA timezone, e.g. Asia/Ho_Chi_Minh */
+  timezone: string;
+  /** EventBridge cron fields, e.g. 0 20 * * ? * */
+  stopCron: string;
+  startCron: string;
+};
+
 export type EnvironmentConfig = {
   account?: string;
   nodeEnv: EnvironmentName;
@@ -68,6 +77,8 @@ export type EnvironmentConfig = {
     rdsProxy: {
       enabled: boolean;
     };
+    /** Dev-only — loaded from .env (RDS_SCHEDULE_*). Omitted on stg/prd. */
+    schedule?: DatabaseScheduleConfig;
   };
   cache: {
     enabled: boolean;

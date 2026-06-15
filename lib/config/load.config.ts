@@ -1,7 +1,31 @@
 import { PROJECT_ID_MAX_LENGTH } from '../constants/app.constants';
-import { ENVIRONMENT_NAMES } from '../constants/environment.constants';
+import { Environment, ENVIRONMENT_NAMES } from '../constants/environment.constants';
 import { ENVIRONMENT_CONFIGS } from './environments.config';
-import type { EnvironmentName, LoadedConfig } from '../types/config.types';
+import type { DatabaseScheduleConfig, EnvironmentName, LoadedConfig } from '../types/config.types';
+
+const DEFAULT_RDS_SCHEDULE: Omit<DatabaseScheduleConfig, 'enabled'> = {
+  timezone: 'Asia/Ho_Chi_Minh',
+  stopCron: '0 20 * * ? *',
+  startCron: '0 8 * * ? *',
+};
+
+const loadDevDatabaseSchedule = (envName: EnvironmentName): DatabaseScheduleConfig | undefined => {
+  if (envName !== Environment.Dev) {
+    return undefined;
+  }
+
+  const enabled = process.env.RDS_SCHEDULE_ENABLED?.trim().toLowerCase() === 'true';
+  if (!enabled) {
+    return { enabled: false, ...DEFAULT_RDS_SCHEDULE };
+  }
+
+  return {
+    enabled: true,
+    timezone: process.env.RDS_SCHEDULE_TIMEZONE?.trim() || DEFAULT_RDS_SCHEDULE.timezone,
+    stopCron: process.env.RDS_SCHEDULE_STOP_CRON?.trim() || DEFAULT_RDS_SCHEDULE.stopCron,
+    startCron: process.env.RDS_SCHEDULE_START_CRON?.trim() || DEFAULT_RDS_SCHEDULE.startCron,
+  };
+};
 
 const isEnvironmentName = (value: string): value is EnvironmentName =>
   (ENVIRONMENT_NAMES as readonly string[]).includes(value);
@@ -41,8 +65,11 @@ export const loadEnvironmentConfig = (
     throw new Error('AWS_ACCOUNT_ID is required (.env local or GitHub Environment var for CD)');
   }
 
+  const schedule = loadDevDatabaseSchedule(envName);
+
   return {
     ...config,
+    database: schedule ? { ...config.database, schedule } : config.database,
     region: awsRegion,
     accountId: account,
     projectId: id,

@@ -14,7 +14,7 @@ const baseConfig = (envName: EnvironmentName): EnvironmentConfig => ({
   database: {
     enabled: true,
     databaseName: 'app',
-    instanceType: 't3.micro',
+    instanceType: 't4g.micro',
     engineVersion: '18',
     publiclyAccessible: false,
     rdsProxy: {
@@ -93,7 +93,7 @@ export const ENVIRONMENT_CONFIGS: Record<EnvironmentName, EnvironmentConfig> = {
     database: {
       enabled: true,
       databaseName: 'app',
-      instanceType: 't3.micro',
+      instanceType: 't4g.micro',
       engineVersion: '18',
       publiclyAccessible: true,
       publicIngressCidrs: ['0.0.0.0/0'],
