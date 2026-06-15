@@ -29,6 +29,21 @@ const resolvePostgresEngineVersion = (version: string): rds.PostgresEngineVersio
   }
 };
 
+const resolveAuroraPostgresEngineVersion = (version: string): rds.AuroraPostgresEngineVersion => {
+  switch (version) {
+    case '18':
+      return rds.AuroraPostgresEngineVersion.of('18.3', '18');
+    case '17':
+      return rds.AuroraPostgresEngineVersion.VER_17_9;
+    case '16':
+      return rds.AuroraPostgresEngineVersion.VER_16_13;
+    default:
+      throw new Error(
+        `Unsupported Aurora PostgreSQL engine version: ${version}. Use 16, 17, or 18.`,
+      );
+  }
+};
+
 const createRdsSchedule = (
   scope: Construct,
   config: LoadedConfig,
@@ -101,6 +116,35 @@ const createRdsSchedule = (
   });
 };
 
+const createDatabaseProxy = (
+  scope: Construct,
+  naming: ResourceNaming,
+  credentials: secretsmanager.ISecret,
+  vpc: ec2.IVpc,
+  databaseSecurityGroup: ec2.SecurityGroup,
+  target: rds.ProxyTarget,
+): rds.DatabaseProxy => {
+  const rdsProxyName = naming.resource('rds-proxy');
+  const rdsProxyRole = createServiceRole(
+    scope,
+    'RdsProxyRole',
+    naming.iamRole(rdsProxyName),
+    SERVICE_PRINCIPAL.RDS,
+  );
+
+  return new rds.DatabaseProxy(scope, 'RdsProxy', {
+    dbProxyName: rdsProxyName,
+    proxyTarget: target,
+    secrets: [credentials],
+    role: rdsProxyRole,
+    vpc,
+    vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+    securityGroups: [databaseSecurityGroup],
+    requireTLS: true,
+    idleClientTimeout: Duration.minutes(30),
+  });
+};
+
 export type DatabaseStackProps = StackProps & {
   config: LoadedConfig;
   vpc: ec2.IVpc;
@@ -109,7 +153,7 @@ export type DatabaseStackProps = StackProps & {
 
 export class DatabaseStack extends Stack {
   public readonly secret: secretsmanager.ISecret;
-  /** Host for Lambda DB connection — RDS Proxy endpoint or instance hostname */
+  /** Host for Lambda DB connection — RDS Proxy endpoint or database hostname */
   public readonly proxyEndpoint: string;
 
   constructor(scope: Construct, id: string, props: DatabaseStackProps) {
@@ -117,6 +161,7 @@ export class DatabaseStack extends Stack {
 
     const { config, vpc, lambdaSecurityGroup } = props;
     const naming = new ResourceNaming(config);
+    const { database } = config;
 
     const databaseSecurityGroup = new ec2.SecurityGroup(this, 'DatabaseSg', {
       vpc,
@@ -127,10 +172,10 @@ export class DatabaseStack extends Stack {
     databaseSecurityGroup.addIngressRule(
       lambdaSecurityGroup,
       ec2.Port.tcp(5432),
-      config.database.rdsProxy.enabled ? 'Lambda to RDS Proxy' : 'Lambda to RDS',
+      database.rdsProxy.enabled ? 'Lambda to RDS Proxy' : 'Lambda to database',
     );
 
-    for (const cidr of config.database.publicIngressCidrs ?? []) {
+    for (const cidr of database.publicIngressCidrs ?? []) {
       databaseSecurityGroup.addIngressRule(
         ec2.Peer.ipv4(cidr),
         ec2.Port.tcp(5432),
@@ -157,75 +202,118 @@ export class DatabaseStack extends Stack {
       subnetType: ec2.SubnetType.PUBLIC,
       onePerAz: true,
     });
-    // Include all subnets in the DB subnet group so toggling public access does not
-    // try to remove in-use private subnets from an existing group.
-    const dbSubnetSelection = config.database.publiclyAccessible
+    const dbSubnetSelection = database.publiclyAccessible
       ? { subnets: [...publicSubnets.subnets, ...privateSubnets.subnets] }
       : privateSubnets;
 
-    const instanceIdentifier = naming.resource('postgres');
+    const isPrd = config.envName === Environment.Prd;
+    const removalPolicy = isPrd ? RemovalPolicy.SNAPSHOT : RemovalPolicy.DESTROY;
 
-    const instance = new rds.DatabaseInstance(this, 'Postgres', {
-      instanceIdentifier,
-      engine: rds.DatabaseInstanceEngine.postgres({
-        version: resolvePostgresEngineVersion(config.database.engineVersion),
-      }),
-      vpc,
-      vpcSubnets: dbSubnetSelection,
-      publiclyAccessible: config.database.publiclyAccessible,
-      securityGroups: [databaseSecurityGroup],
-      credentials: rds.Credentials.fromSecret(credentials),
-      databaseName: config.database.databaseName,
-      instanceType: new ec2.InstanceType(config.database.instanceType),
-      allocatedStorage: 20,
-      maxAllocatedStorage: 100,
-      removalPolicy:
-        config.envName === Environment.Prd ? RemovalPolicy.SNAPSHOT : RemovalPolicy.DESTROY,
-      deletionProtection: config.envName === Environment.Prd,
-    });
+    if (database.engine === 'aurora-serverless-v2') {
+      const serverlessV2 = database.serverlessV2;
+      if (!serverlessV2) {
+        throw new Error('database.serverlessV2 is required when engine is aurora-serverless-v2');
+      }
 
-    if (config.database.rdsProxy.enabled) {
-      const rdsProxyName = naming.resource('rds-proxy');
-      const rdsProxyRole = createServiceRole(
-        this,
-        'RdsProxyRole',
-        naming.iamRole(rdsProxyName),
-        SERVICE_PRINCIPAL.RDS,
-      );
-
-      const proxy = new rds.DatabaseProxy(this, 'RdsProxy', {
-        dbProxyName: rdsProxyName,
-        proxyTarget: rds.ProxyTarget.fromInstance(instance),
-        secrets: [credentials],
-        role: rdsProxyRole,
+      const clusterIdentifier = naming.resource('aurora');
+      const cluster = new rds.DatabaseCluster(this, 'AuroraCluster', {
+        clusterIdentifier,
+        engine: rds.DatabaseClusterEngine.auroraPostgres({
+          version: resolveAuroraPostgresEngineVersion(database.engineVersion),
+        }),
         vpc,
-        vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+        vpcSubnets: privateSubnets,
         securityGroups: [databaseSecurityGroup],
-        requireTLS: true,
-        idleClientTimeout: Duration.minutes(30),
+        credentials: rds.Credentials.fromSecret(credentials),
+        defaultDatabaseName: database.databaseName,
+        writer: rds.ClusterInstance.serverlessV2('Writer'),
+        serverlessV2MinCapacity: serverlessV2.minCapacity,
+        serverlessV2MaxCapacity: serverlessV2.maxCapacity,
+        enableDataApi: database.dataApi?.enabled ?? false,
+        removalPolicy,
+        deletionProtection: isPrd,
       });
-      this.proxyEndpoint = proxy.endpoint;
 
-      new CfnOutput(this, 'RdsProxyEndpoint', {
-        exportName: naming.resource(rdsProxyName, 'endpoint'),
-        value: proxy.endpoint,
-      });
+      if (database.rdsProxy.enabled) {
+        const proxy = createDatabaseProxy(
+          this,
+          naming,
+          credentials,
+          vpc,
+          databaseSecurityGroup,
+          rds.ProxyTarget.fromCluster(cluster),
+        );
+        this.proxyEndpoint = proxy.endpoint;
+
+        new CfnOutput(this, 'RdsProxyEndpoint', {
+          exportName: naming.resource(naming.resource('rds-proxy'), 'endpoint'),
+          value: proxy.endpoint,
+        });
+      } else {
+        this.proxyEndpoint = cluster.clusterEndpoint.hostname;
+
+        new CfnOutput(this, 'AuroraClusterEndpoint', {
+          exportName: naming.resource('aurora', 'endpoint'),
+          value: cluster.clusterEndpoint.hostname,
+        });
+      }
     } else {
-      this.proxyEndpoint = instance.dbInstanceEndpointAddress;
+      const instanceType = database.instanceType;
+      if (!instanceType) {
+        throw new Error('database.instanceType is required when engine is rds');
+      }
 
-      new CfnOutput(this, 'RdsInstanceEndpoint', {
-        exportName: naming.resource('postgres', 'endpoint'),
-        value: instance.dbInstanceEndpointAddress,
+      const instanceIdentifier = naming.resource('postgres');
+      const instance = new rds.DatabaseInstance(this, 'Postgres', {
+        instanceIdentifier,
+        engine: rds.DatabaseInstanceEngine.postgres({
+          version: resolvePostgresEngineVersion(database.engineVersion),
+        }),
+        vpc,
+        vpcSubnets: dbSubnetSelection,
+        publiclyAccessible: database.publiclyAccessible,
+        securityGroups: [databaseSecurityGroup],
+        credentials: rds.Credentials.fromSecret(credentials),
+        databaseName: database.databaseName,
+        instanceType: new ec2.InstanceType(instanceType),
+        allocatedStorage: 20,
+        maxAllocatedStorage: 100,
+        removalPolicy,
+        deletionProtection: isPrd,
       });
+
+      if (database.rdsProxy.enabled) {
+        const proxy = createDatabaseProxy(
+          this,
+          naming,
+          credentials,
+          vpc,
+          databaseSecurityGroup,
+          rds.ProxyTarget.fromInstance(instance),
+        );
+        this.proxyEndpoint = proxy.endpoint;
+
+        new CfnOutput(this, 'RdsProxyEndpoint', {
+          exportName: naming.resource(naming.resource('rds-proxy'), 'endpoint'),
+          value: proxy.endpoint,
+        });
+      } else {
+        this.proxyEndpoint = instance.dbInstanceEndpointAddress;
+
+        new CfnOutput(this, 'RdsInstanceEndpoint', {
+          exportName: naming.resource('postgres', 'endpoint'),
+          value: instance.dbInstanceEndpointAddress,
+        });
+      }
+
+      if (database.schedule?.enabled) {
+        createRdsSchedule(this, config, naming, instanceIdentifier, database.schedule);
+      }
     }
 
     new CfnOutput(this, 'RdsSecretArn', {
       exportName: naming.resource(rdsSecretName, 'arn'),
       value: credentials.secretArn,
     });
-
-    if (config.database.schedule?.enabled) {
-      createRdsSchedule(this, config, naming, instanceIdentifier, config.database.schedule);
-    }
   }
 }

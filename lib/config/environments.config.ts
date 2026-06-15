@@ -13,6 +13,7 @@ const baseConfig = (envName: EnvironmentName): EnvironmentConfig => ({
   natGateways: 1,
   database: {
     enabled: true,
+    engine: 'rds',
     databaseName: 'app',
     instanceType: 't4g.micro',
     engineVersion: '18',
@@ -92,6 +93,7 @@ export const ENVIRONMENT_CONFIGS: Record<EnvironmentName, EnvironmentConfig> = {
     ...baseConfig(Environment.Dev),
     database: {
       enabled: true,
+      engine: 'rds',
       databaseName: 'app',
       instanceType: 't4g.micro',
       engineVersion: '18',
@@ -104,6 +106,23 @@ export const ENVIRONMENT_CONFIGS: Record<EnvironmentName, EnvironmentConfig> = {
   },
   [Environment.Stg]: {
     ...baseConfig(Environment.Stg),
+    database: {
+      enabled: true,
+      engine: 'aurora-serverless-v2',
+      databaseName: 'app',
+      engineVersion: '18',
+      serverlessV2: {
+        minCapacity: 0.5,
+        maxCapacity: 1,
+      },
+      publiclyAccessible: false,
+      rdsProxy: {
+        enabled: true,
+      },
+      dataApi: {
+        enabled: true,
+      },
+    },
   },
   [Environment.Prd]: {
     ...baseConfig(Environment.Prd),
@@ -111,11 +130,18 @@ export const ENVIRONMENT_CONFIGS: Record<EnvironmentName, EnvironmentConfig> = {
     natGateways: 2,
     database: {
       enabled: true,
+      engine: 'aurora-serverless-v2',
       databaseName: 'app',
-      instanceType: 't4g.small',
       engineVersion: '18',
+      serverlessV2: {
+        minCapacity: 0.5,
+        maxCapacity: 4,
+      },
       publiclyAccessible: false,
       rdsProxy: {
+        enabled: true,
+      },
+      dataApi: {
         enabled: true,
       },
     },
