@@ -1,6 +1,6 @@
 name: CDK CD
 
-# Deploy infra khi push develop / staging.
+# Deploy infra on push to develop / staging.
 #
 # GitHub Environments: cdk-develop | cdk-staging
 # Secret:  AWS_ROLE_TO_ASSUME

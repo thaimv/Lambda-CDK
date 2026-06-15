@@ -52,6 +52,37 @@ export type DatabaseScheduleConfig = {
   startCron: string;
 };
 
+export type DatabaseEngine = 'rds' | 'aurora-serverless-v2';
+
+export type DatabaseConfig = {
+  enabled: boolean;
+  /** `rds` = dev (provisioned instance); `aurora-serverless-v2` = stg/prd */
+  engine: DatabaseEngine;
+  databaseName: string;
+  /** PostgreSQL major version — RDS/Aurora 16–18 (Aurora 18 → 18.3) */
+  engineVersion: string;
+  /** Provisioned RDS only */
+  instanceType?: string;
+  /** Aurora Serverless v2 only — ACU min/max */
+  serverlessV2?: {
+    minCapacity: number;
+    maxCapacity: number;
+  };
+  /** Provisioned RDS only — Aurora is always private in VPC */
+  publiclyAccessible: boolean;
+  /** Security group ingress CIDRs for PostgreSQL, e.g. dev `['0.0.0.0/0']` for DBeaver/psql */
+  publicIngressCidrs?: string[];
+  rdsProxy: {
+    enabled: boolean;
+  };
+  /** Aurora only — enables RDS Query Editor via Data API */
+  dataApi?: {
+    enabled: boolean;
+  };
+  /** Dev-only — loaded from .env (RDS_SCHEDULE_*). Omitted on stg/prd. */
+  schedule?: DatabaseScheduleConfig;
+};
+
 export type EnvironmentConfig = {
   account?: string;
   nodeEnv: EnvironmentName;
@@ -64,22 +95,7 @@ export type EnvironmentConfig = {
   /** VPC spans this many Availability Zones (1 = cheaper dev, 2 = HA) */
   maxAzs: number;
   natGateways: number;
-  database: {
-    enabled: boolean;
-    databaseName: string;
-    instanceType: string;
-    /** PostgreSQL major version, e.g. '18' */
-    engineVersion: string;
-    /** Place RDS in a public subnet (required for internet-facing endpoint) */
-    publiclyAccessible: boolean;
-    /** Security group ingress CIDRs for PostgreSQL, e.g. dev `['0.0.0.0/0']` for DBeaver/psql */
-    publicIngressCidrs?: string[];
-    rdsProxy: {
-      enabled: boolean;
-    };
-    /** Dev-only — loaded from .env (RDS_SCHEDULE_*). Omitted on stg/prd. */
-    schedule?: DatabaseScheduleConfig;
-  };
+  database: DatabaseConfig;
   cache: {
     enabled: boolean;
     engine: 'valkey' | 'redis';
